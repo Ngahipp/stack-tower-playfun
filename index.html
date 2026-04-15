@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="x-ogp-key" content="YOUR_API_KEY">
+<title>Stack Tower</title>
+<script src="https://sdk.play.fun"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; font-family: 'Segoe UI', system-ui, sans-serif; }
+#game-container { width: 100%; height: 100%; position: relative; }
+canvas { display: block; width: 100% !important; height: 100% !important; }
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script>
+/* ==========================================
+   PLAY.FUN SDK MANAGER
+   ========================================== */
+const PlayFunSDK = {
+  ogp: null,
+  ready: false,
+  bestScore: 0,
+  currentSessionScore: 0,
+  pointsAddedThisSession: 0,
+
+  init() {
+    try {
+      this.ogp = new OpenGameSDK({
+        ui: { usePointsWidget: true, theme: 'dark' },
+        logLevel: 'warn'
+      });
+      this.ogp.on('OnReady', () => {
+        this.ready = true;
+        console.log('[Play.fun] SDK ready');
+        this.loadBestScore();
+      });
+      this.ogp.on('LoginSuccess', () => {
+        console.log('[Play.fun] Logged in:', this.ogp.playerId);
+      });
+      this.ogp.on('SavePointsSuccess', () => {
+        console.log('[Play.fun] Points saved');
+      });
+      this.ogp.on('SavePointsFailed', () => {
+        console.warn('[Play.fun] Save failed');
+      });
+      this.ogp.init({ gameId: 'YOUR_GAME_ID' });
+    } catch (e) {
+      console.warn('[Play.fun] SDK not available, running in offline mode');
+    }
+  },
+
+  async loadBestScore() {
+    if (!this.ready || !this.ogp) return;
+    try {
+      const result = await this.ogp.getPoints();
+      this.bestScore = result?.points ? Number(result.points) : 0;
+    } catch (e) { this.bestScore = 0; }
+  },
+
+  startSession() {
+    this.currentSessionScore = 0;
+    this.pointsAddedThisSession = 0;
+  },
+
+  updateScore(newScore) {
+    this.currentSessionScore = Math.max(this.currentSessionScore, newScore);
+    if (this.ready && this.ogp && this.currentSessionScore > this.bestScore) {
+      const delta = this.currentSessionScore - this.bestScore - this.pointsAddedThisSession;
+      if (delta > 0) {
+        this.ogp.addPoints(delta);
+        this.pointsAddedThisSession += delta;
+      }
+    }
+  },
+
+  async endSession() {
+    if (this.ready && this.ogp && this.pointsAddedThisSession > 0) {
+      try {
+        await this.ogp.endGame();
+        this.bestScore = Math.max(this.bestScore, this.currentSessionScore);
+      } catch (e) { console.warn('[Play.fun] endGame error:', e); }
+    }
+  }
+};
+
+/* ==========================================
+   PROCEDURAL AUDIO ENGINE (Web Audio API)
+   ========================================== */
+const AudioEngine = {
+  ctx: null,
+  muted: false,
+
+  init() {
+    try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { console.warn('Web Audio not supported'); }
+  },
+
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  },
+
+  playDrop(combo) {
+    if (!this.ctx || this.muted) return;
+    this.resume();
+    const t = this.ctx.currentTime;
+    // Pitched click based on tower height
+    const baseFreq = 220 + combo * 30;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, t + 0.05);
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.15);
+  },
+
+  playPerfect(comboLevel) {
+    if (!this.ctx || this.muted) return;
+    this.resume();
+    const t = this.ctx.currentTime;
+    // Rising arpeggio chord
+    const baseNote = 440 + comboLevel * 60;
+    [0, 4, 7, 12].forEach((semitone, i) => {
+      const freq = baseNote * Math.pow(2, semitone / 12);
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + i * 0.06);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.2, t + i * 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4 + i * 0.04);
+      osc.connect(gain).connect(this.ctx.destination);
+      osc.start(t + i * 0.06);
+      osc.stop(t + 0.5);
+    });
+  },
+
+  playMiss() {
+    if (!this.ctx || this.muted) return;
+    this.resume();
+    const t = this.ctx.currentTime;
+    // Low thud
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + 0.3);
+    gain.gain.setValueAtTime(0.4, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.3);
+    // Noise burst
+    const bufferSize = this.ctx.sampleRate * 0.15;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.3;
+    const noise = this.ctx.createBufferSource();
+    const ng = this.ctx.createGain();
+    noise.buffer = buffer;
+    ng.gain.setValueAtTime(0.15, t);
+    ng.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    noise.connect(ng).connect(this.ctx.destination);
+    noise.start(t);
+  },
+
+  playGameOver() {
+    if (!this.ctx || this.muted) return;
+    this.resume();
+    const t = this.ctx.currentTime;
+    // Descending tones
+    [400, 350, 280, 200].forEach((freq, i) => {
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, t + i * 0.15);
+      gain.gain.setValueAtTime(0.12, t + i * 0.15);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.15 + 0.2);
+      osc.connect(gain).connect(this.ctx.destination);
+      osc.start(t + i * 0.15);
+      osc.stop(t + i * 0.15 + 0.25);
+    });
+  },
+
+  playMenuClick() {
+    if (!this.ctx || this.muted) return;
+    this.resume();
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(800, t);
+    osc.frequency.exponentialRampToValueAtTime(1200, t + 0.05);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    osc.connect(gain).connect(this.ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.08);
+  }
+};
+
+/* ==========================================
+   HAPTIC FEEDBACK
+   ========================================== */
+function vibrate(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch(e) {}
+}
+
+/* ==========================================
+   CONSTANTS
+   ========================================== */
+const GAME_WIDTH = 400;
+const GAME_HEIGHT = 700;
+const BLOCK_HEIGHT = 40;
+const INITIAL_BLOCK_WIDTH = 200;
+const BLOCK_SPEED_INITIAL = 2.5;
+const BLOCK_SPEED_INCREMENT = 0.12;
+const MAX_BLOCK_SPEED = 10;
+const PERFECT_THRESHOLD = 6;
+
+const PALETTES = [
+  ['#FF6B6B','#FF8E8E'],['#FECA57','#FFF089'],['#48DBFB','#7BE8FF'],
+  ['#FF9FF3','#FFB8F9'],['#54A0FF','#7DB8FF'],['#5F27CD','#8854E0'],
+  ['#01A3A4','#34CBCC'],['#EE5A24','#F3784D'],['#6AB04C','#7FCE5E'],
+  ['#E056A0','#EB7AB8'],['#F8B500','#FFCC33'],['#00D2D3','#33E0E1']
+];
+
+/* ==========================================
+   BOOT SCENE — init audio + SDK
+   ========================================== */
+class BootScene extends Phaser.Scene {
+  constructor() { super({ key: 'BootScene' }); }
+  create() {
+    AudioEngine.init();
+    PlayFunSDK.init();
+    this.scene.start('MenuScene');
+  }
+}
+
+/* ==========================================
+   MENU SCENE
+   ========================================== */
+class MenuScene extends Phaser.Scene {
+  constructor() { super({ key: 'MenuScene' }); }
+
+  create() {
+    const w = this.scale.width, h = this.scale.height;
+    AudioEngine.resume();
+
+    // Background
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0a0a1a, 0x0a0a1a, 0x121230, 0x121230, 1);
+    bg.fillRect(0, 0, w, h);
+
+    // Stars
+    for (let i = 0; i < 50; i++) {
+      const sx = Phaser.Math.Between(0, w);
+      const sy = Phaser.Math.Between(0, h);
+      const size = Phaser.Math.FloatBetween(0.5, 2);
+      const star = this.add.circle(sx, sy, size, 0xffffff, Phaser.Math.FloatBetween(0.2, 0.6));
+      this.tweens.add({
+        targets: star, alpha: Phaser.Math.FloatBetween(0.05, 0.2),
+        duration: Phaser.Math.Between(1000, 3000), yoyo: true, repeat: -1
+      });
+    }
+
+    // Decorative tower
+    const demoColors = [0xFF6B6B, 0xFECA57, 0x48DBFB, 0xFF9FF3, 0x54A0FF, 0x5F27CD, 0x01A3A4, 0xEE5A24];
+    for (let i = 0; i < 8; i++) {
+      const bw = INITIAL_BLOCK_WIDTH - i * 6;
+      const bx = w / 2;
+      const by = h * 0.68 - i * (BLOCK_HEIGHT + 2);
+      const block = this.add.rectangle(bx, by, bw, BLOCK_HEIGHT, demoColors[i]);
+      block.setAlpha(0);
+      this.tweens.add({
+        targets: block, alpha: 0.5, duration: 300, delay: i * 80,
+        onComplete: () => {
+          this.tweens.add({
+            targets: block, y: by - 4, duration: 1500 + i * 150,
+            yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+          });
+        }
+      });
+    }
+
+    // Title
+    const titleStack = this.add.text(w / 2, h * 0.14, 'STACK', {
+      fontSize: '76px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#ffffff',
+      shadow: { offsetX: 0, offsetY: 6, color: '#00000088', blur: 15, fill: true }
+    }).setOrigin(0.5).setAlpha(0);
+    this.tweens.add({ targets: titleStack, alpha: 1, y: h * 0.16, duration: 500, ease: 'Back.easeOut' });
+
+    const titleTower = this.add.text(w / 2, h * 0.22, 'TOWER', {
+      fontSize: '32px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#48DBFB', letterSpacing: 16,
+      shadow: { offsetX: 0, offsetY: 2, color: '#00000066', blur: 8, fill: true }
+    }).setOrigin(0.5).setAlpha(0);
+    this.tweens.add({ targets: titleTower, alpha: 1, duration: 500, delay: 200 });
+
+    // High score
+    const best = localStorage.getItem('stackTowerBest') || 0;
+    if (best > 0) {
+      this.add.text(w / 2, h * 0.82, `BEST: ${best}`, {
+        fontSize: '20px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+        color: '#FECA57', fontStyle: 'bold'
+      }).setOrigin(0.5);
+    }
+
+    // Sound toggle
+    const soundBtn = this.add.text(w - 20, 20, AudioEngine.muted ? '🔇' : '🔊', {
+      fontSize: '28px'
+    }).setOrigin(1, 0).setInteractive({ useHandCursor: true }).setDepth(20);
+    soundBtn.on('pointerdown', () => {
+      AudioEngine.muted = !AudioEngine.muted;
+      soundBtn.setText(AudioEngine.muted ? '🔇' : '🔊');
+    });
+
+    // Tap to start
+    const startText = this.add.text(w / 2, h * 0.92, 'TAP TO START', {
+      fontSize: '22px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      color: '#ffffff', fontStyle: 'bold'
+    }).setOrigin(0.5);
+    this.tweens.add({
+      targets: startText, alpha: 0.3, duration: 700,
+      yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+    });
+
+    this.input.once('pointerdown', () => {
+      AudioEngine.resume();
+      AudioEngine.playMenuClick();
+      this.scene.start('GameScene');
+    });
+  }
+}
+
+/* ==========================================
+   GAME SCENE
+   ========================================== */
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  create() {
+    this.score = 0;
+    this.combo = 0;
+    this.maxCombo = 0;
+    this.blockSpeed = BLOCK_SPEED_INITIAL;
+    this.direction = 1;
+    this.gameOver = false;
+    this.blocks = [];
+
+    const w = this.scale.width, h = this.scale.height;
+
+    PlayFunSDK.startSession();
+
+    // Background
+    this.bgGraphics = this.add.graphics();
+    this.drawBackground(0);
+
+    // Stars layer
+    this.starsContainer = this.add.container(0, 0);
+    for (let i = 0; i < 40; i++) {
+      const star = this.add.circle(
+        Phaser.Math.Between(0, w), Phaser.Math.Between(0, h),
+        Phaser.Math.FloatBetween(0.5, 1.5), 0xffffff, Phaser.Math.FloatBetween(0.15, 0.4)
+      );
+      this.starsContainer.add(star);
+    }
+
+    // Block container
+    this.blockContainer = this.add.container(0, 0);
+
+    // Base block
+    const baseY = h - 60;
+    this.placeBlock(w / 2, baseY, INITIAL_BLOCK_WIDTH);
+    this.spawnMovingBlock();
+
+    // Score text
+    this.scoreText = this.add.text(w / 2, 55, '0', {
+      fontSize: '68px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#ffffff',
+      shadow: { offsetX: 0, offsetY: 4, color: '#00000066', blur: 12, fill: true }
+    }).setOrigin(0.5).setDepth(10);
+
+    // Combo text
+    this.comboText = this.add.text(w / 2, 120, '', {
+      fontSize: '22px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#FECA57'
+    }).setOrigin(0.5).setDepth(10).setAlpha(0);
+
+    // Sound toggle
+    const soundBtn = this.add.text(w - 20, 20, AudioEngine.muted ? '🔇' : '🔊', {
+      fontSize: '24px'
+    }).setOrigin(1, 0).setInteractive({ useHandCursor: true }).setDepth(20);
+    soundBtn.on('pointerdown', (p) => {
+      AudioEngine.muted = !AudioEngine.muted;
+      soundBtn.setText(AudioEngine.muted ? '🔇' : '🔊');
+      p.event.stopPropagation();
+    });
+
+    // Guide
+    this.guideText = this.add.text(w / 2, h * 0.42, 'TAP TO DROP', {
+      fontSize: '18px', fontFamily: 'Segoe UI, system-ui, sans-serif', color: '#ffffff66'
+    }).setOrigin(0.5).setDepth(10);
+    this.tweens.add({
+      targets: this.guideText, alpha: 0, duration: 500,
+      yoyo: true, repeat: 3, onComplete: () => { if (this.guideText) { this.guideText.destroy(); this.guideText = null; } }
+    });
+
+    // Input
+    this.input.on('pointerdown', () => this.dropBlock());
+  }
+
+  drawBackground(level) {
+    const w = this.scale.width, h = this.scale.height;
+    const r = Math.min(1, level * 0.025);
+    const topColor = Phaser.Display.Color.Interpolate.ColorWithColor(
+      { r: 10, g: 10, b: 26 }, { r: 5, g: 5, b: 40 }, 100, r * 100
+    );
+    const botColor = Phaser.Display.Color.Interpolate.ColorWithColor(
+      { r: 18, g: 18, b: 48 }, { r: 8, g: 10, b: 60 }, 100, r * 100
+    );
+    const tc = (Math.floor(topColor.r) << 16) | (Math.floor(topColor.g) << 8) | Math.floor(topColor.b);
+    const bc = (Math.floor(botColor.r) << 16) | (Math.floor(botColor.g) << 8) | Math.floor(botColor.b);
+    this.bgGraphics.clear();
+    this.bgGraphics.fillGradientStyle(tc, tc, bc, bc, 1);
+    this.bgGraphics.fillRect(0, 0, w, h);
+  }
+
+  getBlockColor(index) { return PALETTES[index % PALETTES.length]; }
+
+  placeBlock(x, y, width) {
+    const colors = this.getBlockColor(this.blocks.length);
+    const hex1 = Phaser.Display.Color.HexStringToColor(colors[0]).color;
+    const hex2 = Phaser.Display.Color.HexStringToColor(colors[1]).color;
+    const g = this.add.graphics();
+    // Main body
+    g.fillStyle(hex1, 1);
+    g.fillRoundedRect(-width / 2, -BLOCK_HEIGHT / 2, width, BLOCK_HEIGHT, 5);
+    // Top highlight
+    g.fillStyle(hex2, 0.5);
+    g.fillRoundedRect(-width / 2 + 3, -BLOCK_HEIGHT / 2 + 3, width - 6, BLOCK_HEIGHT * 0.35, 4);
+    // Bottom shadow
+    g.fillStyle(0x000000, 0.15);
+    g.fillRoundedRect(-width / 2 + 2, BLOCK_HEIGHT / 2 - 6, width - 4, 5, 2);
+
+    g.setPosition(x, y);
+    this.blockContainer.add(g);
+
+    // Landing animation
+    g.setScale(1.05, 0.9);
+    this.tweens.add({ targets: g, scaleX: 1, scaleY: 1, duration: 120, ease: 'Back.easeOut' });
+
+    this.blocks.push({ x, y, width, graphics: g });
+    return g;
+  }
+
+  spawnMovingBlock() {
+    const lastBlock = this.blocks[this.blocks.length - 1];
+    const newY = lastBlock.y - BLOCK_HEIGHT - 2;
+    const colors = this.getBlockColor(this.blocks.length);
+    const hex1 = Phaser.Display.Color.HexStringToColor(colors[0]).color;
+    const hex2 = Phaser.Display.Color.HexStringToColor(colors[1]).color;
+    const bw = lastBlock.width;
+
+    const g = this.add.graphics();
+    g.fillStyle(hex1, 1);
+    g.fillRoundedRect(-bw / 2, -BLOCK_HEIGHT / 2, bw, BLOCK_HEIGHT, 5);
+    g.fillStyle(hex2, 0.5);
+    g.fillRoundedRect(-bw / 2 + 3, -BLOCK_HEIGHT / 2 + 3, bw - 6, BLOCK_HEIGHT * 0.35, 4);
+    g.fillStyle(0x000000, 0.15);
+    g.fillRoundedRect(-bw / 2 + 2, BLOCK_HEIGHT / 2 - 6, bw - 4, 5, 2);
+
+    this.direction = (this.blocks.length % 2 === 0) ? 1 : -1;
+    const startX = this.direction === 1 ? -bw / 2 : this.scale.width + bw / 2;
+    g.setPosition(startX, newY);
+    this.blockContainer.add(g);
+
+    this.movingBlock = { x: startX, y: newY, width: bw, graphics: g };
+  }
+
+  dropBlock() {
+    if (this.gameOver || !this.movingBlock) return;
+    AudioEngine.resume();
+
+    const moving = this.movingBlock;
+    const last = this.blocks[this.blocks.length - 1];
+
+    const movingLeft = moving.x - moving.width / 2;
+    const movingRight = moving.x + moving.width / 2;
+    const lastLeft = last.x - last.width / 2;
+    const lastRight = last.x + last.width / 2;
+    const overlapLeft = Math.max(movingLeft, lastLeft);
+    const overlapRight = Math.min(movingRight, lastRight);
+    const overlapWidth = overlapRight - overlapLeft;
+
+    if (overlapWidth <= 0) {
+      this.handleGameOver(moving);
+      return;
+    }
+
+    moving.graphics.destroy();
+    const overlapCenterX = (overlapLeft + overlapRight) / 2;
+    const isPerfect = Math.abs(moving.x - last.x) < PERFECT_THRESHOLD;
+
+    if (isPerfect) {
+      this.combo++;
+      this.maxCombo = Math.max(this.maxCombo, this.combo);
+      this.placeBlock(last.x, moving.y, last.width);
+      this.showPerfect();
+      this.screenFlash();
+      AudioEngine.playPerfect(this.combo);
+      vibrate([15, 30, 15]);
+    } else {
+      this.combo = 0;
+      this.placeBlock(overlapCenterX, moving.y, overlapWidth);
+      this.animateFallingPiece(moving, last, overlapLeft, overlapRight);
+      AudioEngine.playDrop(this.score);
+      vibrate(10);
+    }
+
+    this.movingBlock = null;
+    this.score++;
+    this.scoreText.setText(this.score.toString());
+
+    // Bonus points for combos: 1 point base + combo bonus
+    const pointsEarned = 1 + (isPerfect ? this.combo : 0);
+    PlayFunSDK.updateScore(this.score + this.maxCombo * 2);
+
+    // Speed ramp
+    this.blockSpeed = Math.min(MAX_BLOCK_SPEED, BLOCK_SPEED_INITIAL + this.score * BLOCK_SPEED_INCREMENT);
+
+    // Camera
+    this.scrollCamera();
+
+    // Score pop animation
+    this.tweens.add({
+      targets: this.scoreText, scaleX: 1.15, scaleY: 1.15,
+      duration: 80, yoyo: true, ease: 'Quad.easeOut'
+    });
+
+    this.time.delayedCall(120, () => {
+      if (!this.gameOver) this.spawnMovingBlock();
+    });
+  }
+
+  animateFallingPiece(moving, last, overlapLeft, overlapRight) {
+    const movingLeft = moving.x - moving.width / 2;
+    const movingRight = moving.x + moving.width / 2;
+    let cutX, cutWidth;
+
+    if (moving.x > last.x) {
+      cutWidth = movingRight - overlapRight;
+      cutX = overlapRight + cutWidth / 2;
+    } else {
+      cutWidth = overlapLeft - movingLeft;
+      cutX = movingLeft + cutWidth / 2;
+    }
+    if (cutWidth < 2) return;
+
+    const colors = this.getBlockColor(this.blocks.length - 1);
+    const hex = Phaser.Display.Color.HexStringToColor(colors[0]).color;
+    const piece = this.add.graphics();
+    piece.fillStyle(hex, 0.7);
+    piece.fillRoundedRect(-cutWidth / 2, -BLOCK_HEIGHT / 2, cutWidth, BLOCK_HEIGHT, 3);
+    piece.setPosition(cutX, moving.y);
+    this.blockContainer.add(piece);
+
+    this.tweens.add({
+      targets: piece, y: moving.y + 700, alpha: 0,
+      angle: (moving.x > last.x) ? 25 : -25,
+      duration: 900, ease: 'Quad.easeIn',
+      onComplete: () => piece.destroy()
+    });
+  }
+
+  showPerfect() {
+    const labels = ['PERFECT!', 'GREAT!', 'AMAZING!', 'GODLIKE!', 'UNSTOPPABLE!'];
+    const colors = ['#FECA57', '#48DBFB', '#FF9FF3', '#FF6B6B', '#54A0FF'];
+    const idx = Math.min(this.combo - 1, labels.length - 1);
+
+    this.comboText.setText(`${labels[idx]}  x${this.combo}`);
+    this.comboText.setColor(colors[idx]);
+    this.comboText.setAlpha(1);
+    this.comboText.setScale(0.5);
+
+    this.tweens.add({
+      targets: this.comboText, scaleX: 1.15, scaleY: 1.15,
+      duration: 180, ease: 'Back.easeOut', yoyo: true,
+      onComplete: () => {
+        this.tweens.add({ targets: this.comboText, alpha: 0, duration: 600, delay: 500 });
+      }
+    });
+
+    // Sparkle particles
+    const w = this.scale.width;
+    for (let i = 0; i < 16; i++) {
+      const px = w / 2 + Phaser.Math.Between(-100, 100);
+      const py = this.scoreText.y + 80;
+      const symbols = ['✦', '✧', '★', '·'];
+      const star = this.add.text(px, py, Phaser.Utils.Array.GetRandom(symbols), {
+        fontSize: `${Phaser.Math.Between(10, 26)}px`, color: colors[idx]
+      }).setOrigin(0.5).setDepth(10);
+      this.tweens.add({
+        targets: star,
+        x: px + Phaser.Math.Between(-80, 80),
+        y: py + Phaser.Math.Between(-100, -20),
+        alpha: 0, angle: Phaser.Math.Between(-90, 90),
+        duration: 500 + Phaser.Math.Between(0, 400), ease: 'Quad.easeOut',
+        onComplete: () => star.destroy()
+      });
+    }
+  }
+
+  screenFlash() {
+    const w = this.scale.width, h = this.scale.height;
+    const flash = this.add.rectangle(w / 2, h / 2, w, h, 0xffffff, 0.12).setDepth(9);
+    this.tweens.add({ targets: flash, alpha: 0, duration: 180, onComplete: () => flash.destroy() });
+  }
+
+  scrollCamera() {
+    const targetOffset = Math.max(0, (this.score - 3) * (BLOCK_HEIGHT + 2));
+    this.tweens.add({
+      targets: this.blockContainer, y: targetOffset,
+      duration: 280, ease: 'Quad.easeOut',
+      onUpdate: () => this.drawBackground(this.score)
+    });
+  }
+
+  handleGameOver(moving) {
+    this.gameOver = true;
+    AudioEngine.playMiss();
+    AudioEngine.playGameOver();
+    vibrate([50, 50, 100]);
+
+    // Screen shake
+    this.cameras.main.shake(300, 0.015);
+
+    this.tweens.add({
+      targets: moving.graphics,
+      y: moving.y + 800, alpha: 0, angle: Phaser.Math.Between(-45, 45),
+      duration: 1000, ease: 'Quad.easeIn',
+      onComplete: () => moving.graphics.destroy()
+    });
+
+    // Local best
+    const localBest = parseInt(localStorage.getItem('stackTowerBest') || '0');
+    const isNewBest = this.score > localBest;
+    if (isNewBest) localStorage.setItem('stackTowerBest', this.score.toString());
+
+    // Play.fun end session
+    this.time.delayedCall(600, async () => {
+      await PlayFunSDK.endSession();
+      this.scene.start('GameOverScene', {
+        score: this.score,
+        best: Math.max(this.score, localBest),
+        isNewBest,
+        maxCombo: this.maxCombo
+      });
+    });
+  }
+
+  update() {
+    if (this.gameOver || !this.movingBlock) return;
+    this.movingBlock.x += this.blockSpeed * this.direction;
+    this.movingBlock.graphics.setPosition(this.movingBlock.x, this.movingBlock.y);
+    const halfW = this.movingBlock.width / 2 + 30;
+    if (this.movingBlock.x > this.scale.width + halfW) this.direction = -1;
+    if (this.movingBlock.x < -halfW) this.direction = 1;
+  }
+}
+
+/* ==========================================
+   GAME OVER SCENE
+   ========================================== */
+class GameOverScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameOverScene' }); }
+
+  create(data) {
+    const w = this.scale.width, h = this.scale.height;
+    const { score, best, isNewBest, maxCombo } = data;
+
+    // Background
+    const bg = this.add.graphics();
+    bg.fillGradientStyle(0x0a0a1a, 0x0a0a1a, 0x121230, 0x121230, 1);
+    bg.fillRect(0, 0, w, h);
+    this.add.rectangle(w / 2, h / 2, w, h, 0x000000, 0.35);
+
+    // Stars
+    for (let i = 0; i < 30; i++) {
+      this.add.circle(
+        Phaser.Math.Between(0, w), Phaser.Math.Between(0, h),
+        Phaser.Math.FloatBetween(0.5, 1.5), 0xffffff, Phaser.Math.FloatBetween(0.1, 0.3)
+      );
+    }
+
+    // Game Over
+    const goText = this.add.text(w / 2, h * 0.12, 'GAME OVER', {
+      fontSize: '44px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#FF6B6B',
+      shadow: { offsetX: 0, offsetY: 3, color: '#00000088', blur: 8, fill: true }
+    }).setOrigin(0.5).setAlpha(0).setScale(0.8);
+    this.tweens.add({ targets: goText, alpha: 1, scaleX: 1, scaleY: 1, duration: 400, ease: 'Back.easeOut' });
+
+    // New best badge
+    if (isNewBest && score > 0) {
+      const badge = this.add.text(w / 2, h * 0.22, '★ NEW BEST ★', {
+        fontSize: '18px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+        fontStyle: 'bold', color: '#FECA57'
+      }).setOrigin(0.5).setAlpha(0);
+      this.tweens.add({ targets: badge, alpha: 1, duration: 300, delay: 300 });
+      this.tweens.add({
+        targets: badge, scaleX: 1.08, scaleY: 1.08,
+        duration: 500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut', delay: 600
+      });
+    }
+
+    // Score
+    const scoreNum = this.add.text(w / 2, h * 0.34, score.toString(), {
+      fontSize: '92px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#ffffff',
+      shadow: { offsetX: 0, offsetY: 5, color: '#000000', blur: 12, fill: true }
+    }).setOrigin(0.5).setAlpha(0);
+    this.tweens.add({ targets: scoreNum, alpha: 1, duration: 400, delay: 200 });
+
+    this.add.text(w / 2, h * 0.43, 'BLOCKS STACKED', {
+      fontSize: '14px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      color: '#ffffff66', letterSpacing: 5
+    }).setOrigin(0.5);
+
+    // Stats panel
+    const panelY = h * 0.54;
+    const panelW = 280, panelH = 90;
+    const panel = this.add.graphics();
+    panel.fillStyle(0xffffff, 0.06);
+    panel.fillRoundedRect(w / 2 - panelW / 2, panelY - panelH / 2, panelW, panelH, 14);
+    panel.lineStyle(1, 0xffffff, 0.08);
+    panel.strokeRoundedRect(w / 2 - panelW / 2, panelY - panelH / 2, panelW, panelH, 14);
+
+    // Left stat: Best
+    this.add.text(w / 2 - 60, panelY - 16, 'BEST', {
+      fontSize: '11px', color: '#ffffff55', letterSpacing: 2
+    }).setOrigin(0.5);
+    this.add.text(w / 2 - 60, panelY + 10, best.toString(), {
+      fontSize: '28px', fontStyle: 'bold', color: '#48DBFB'
+    }).setOrigin(0.5);
+
+    // Divider
+    panel.lineStyle(1, 0xffffff, 0.1);
+    panel.lineBetween(w / 2, panelY - panelH / 2 + 12, w / 2, panelY + panelH / 2 - 12);
+
+    // Right stat: Max Combo
+    this.add.text(w / 2 + 60, panelY - 16, 'COMBO', {
+      fontSize: '11px', color: '#ffffff55', letterSpacing: 2
+    }).setOrigin(0.5);
+    this.add.text(w / 2 + 60, panelY + 10, `x${maxCombo}`, {
+      fontSize: '28px', fontStyle: 'bold', color: '#FECA57'
+    }).setOrigin(0.5);
+
+    // Progress bar
+    const barY = h * 0.66;
+    const barW = 260, barH = 8;
+    const barBg = this.add.graphics();
+    barBg.fillStyle(0xffffff, 0.08);
+    barBg.fillRoundedRect(w / 2 - barW / 2, barY, barW, barH, 4);
+    const ratio = best > 0 ? Math.min(1, score / best) : 0;
+    if (ratio > 0) {
+      const fill = this.add.graphics();
+      fill.fillStyle(0x48DBFB, 0.6);
+      fill.fillRoundedRect(w / 2 - barW / 2, barY, barW * ratio, barH, 4);
+    }
+
+    // Play Again button
+    const btnY = h * 0.78;
+    const btn = this.add.graphics();
+    btn.fillStyle(0x48DBFB, 1);
+    btn.fillRoundedRect(w / 2 - 100, btnY - 28, 200, 56, 28);
+    // Glow
+    btn.fillStyle(0x48DBFB, 0.15);
+    btn.fillRoundedRect(w / 2 - 104, btnY - 32, 208, 64, 32);
+
+    this.add.text(w / 2, btnY, 'PLAY AGAIN', {
+      fontSize: '22px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#0a0a1a'
+    }).setOrigin(0.5);
+
+    const btnZone = this.add.zone(w / 2, btnY, 200, 56).setInteractive({ useHandCursor: true });
+    btnZone.on('pointerdown', () => {
+      AudioEngine.playMenuClick();
+      this.scene.start('GameScene');
+    });
+    btnZone.on('pointerover', () => {
+      btn.clear();
+      btn.fillStyle(0x7BE8FF, 0.15);
+      btn.fillRoundedRect(w / 2 - 104, btnY - 32, 208, 64, 32);
+      btn.fillStyle(0x7BE8FF, 1);
+      btn.fillRoundedRect(w / 2 - 100, btnY - 28, 200, 56, 28);
+    });
+    btnZone.on('pointerout', () => {
+      btn.clear();
+      btn.fillStyle(0x48DBFB, 0.15);
+      btn.fillRoundedRect(w / 2 - 104, btnY - 32, 208, 64, 32);
+      btn.fillStyle(0x48DBFB, 1);
+      btn.fillRoundedRect(w / 2 - 100, btnY - 28, 200, 56, 28);
+    });
+
+    // Menu link
+    const menuText = this.add.text(w / 2, h * 0.9, 'MAIN MENU', {
+      fontSize: '14px', fontFamily: 'Segoe UI, system-ui, sans-serif', color: '#ffffff44'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    menuText.on('pointerdown', () => {
+      AudioEngine.playMenuClick();
+      this.scene.start('MenuScene');
+    });
+    menuText.on('pointerover', () => menuText.setColor('#ffffffaa'));
+    menuText.on('pointerout', () => menuText.setColor('#ffffff44'));
+  }
+}
+
+/* ==========================================
+   PHASER CONFIG
+   ========================================== */
+const config = {
+  type: Phaser.AUTO,
+  width: GAME_WIDTH,
+  height: GAME_HEIGHT,
+  parent: 'game-container',
+  backgroundColor: '#0a0a1a',
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+  scene: [BootScene, MenuScene, GameScene, GameOverScene]
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
