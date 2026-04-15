@@ -8,9 +8,9 @@
 <script src="https://sdk.play.fun"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; font-family: 'Segoe UI', system-ui, sans-serif; }
-#game-container { width: 100%; height: 100%; position: relative; }
-canvas { display: block; width: 100% !important; height: 100% !important; }
+html, body { width: 100vw; height: 100vh; overflow: hidden; background: #0a0a1a; font-family: 'Segoe UI', system-ui, sans-serif; }
+#game-container { width: 100vw; height: 100vh; position: relative; }
+canvas { display: block; }
 </style>
 </head>
 <body>
@@ -237,10 +237,8 @@ function vibrate(pattern) {
 /* ==========================================
    CONSTANTS
    ========================================== */
-const GAME_WIDTH = 400;
-const GAME_HEIGHT = 700;
 const BLOCK_HEIGHT = 40;
-const INITIAL_BLOCK_WIDTH = 200;
+const BLOCK_WIDTH_RATIO = 0.45; // block width as % of screen width
 const BLOCK_SPEED_INITIAL = 2.5;
 const BLOCK_SPEED_INCREMENT = 0.12;
 const MAX_BLOCK_SPEED = 10;
@@ -294,8 +292,9 @@ class MenuScene extends Phaser.Scene {
 
     // Decorative tower
     const demoColors = [0xFF6B6B, 0xFECA57, 0x48DBFB, 0xFF9FF3, 0x54A0FF, 0x5F27CD, 0x01A3A4, 0xEE5A24];
+    const initBW = Math.floor(w * BLOCK_WIDTH_RATIO);
     for (let i = 0; i < 8; i++) {
-      const bw = INITIAL_BLOCK_WIDTH - i * 6;
+      const bw = initBW - i * 6;
       const bx = w / 2;
       const by = h * 0.68 - i * (BLOCK_HEIGHT + 2);
       const block = this.add.rectangle(bx, by, bw, BLOCK_HEIGHT, demoColors[i]);
@@ -312,16 +311,18 @@ class MenuScene extends Phaser.Scene {
     }
 
     // Title
+    const titleSize = Math.max(40, Math.min(76, Math.floor(Math.min(w, h) * 0.12)));
+    const subSize = Math.max(20, Math.min(32, Math.floor(Math.min(w, h) * 0.05)));
     const titleStack = this.add.text(w / 2, h * 0.14, 'STACK', {
-      fontSize: '76px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontSize: `${titleSize}px`, fontFamily: 'Segoe UI, system-ui, sans-serif',
       fontStyle: 'bold', color: '#ffffff',
       shadow: { offsetX: 0, offsetY: 6, color: '#00000088', blur: 15, fill: true }
     }).setOrigin(0.5).setAlpha(0);
     this.tweens.add({ targets: titleStack, alpha: 1, y: h * 0.16, duration: 500, ease: 'Back.easeOut' });
 
     const titleTower = this.add.text(w / 2, h * 0.22, 'TOWER', {
-      fontSize: '32px', fontFamily: 'Segoe UI, system-ui, sans-serif',
-      fontStyle: 'bold', color: '#48DBFB', letterSpacing: 16,
+      fontSize: `${subSize}px`, fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontStyle: 'bold', color: '#48DBFB', letterSpacing: Math.floor(subSize * 0.5),
       shadow: { offsetX: 0, offsetY: 2, color: '#00000066', blur: 8, fill: true }
     }).setOrigin(0.5).setAlpha(0);
     this.tweens.add({ targets: titleTower, alpha: 1, duration: 500, delay: 200 });
@@ -358,6 +359,12 @@ class MenuScene extends Phaser.Scene {
       AudioEngine.resume();
       AudioEngine.playMenuClick();
       this.scene.start('GameScene');
+    });
+
+    // Handle resize
+    this.scale.on('resize', (gameSize) => {
+      this.cameras.main.setSize(gameSize.width, gameSize.height);
+      this.scene.restart();
     });
   }
 }
@@ -400,18 +407,20 @@ class GameScene extends Phaser.Scene {
 
     // Base block
     const baseY = h - 60;
-    this.placeBlock(w / 2, baseY, INITIAL_BLOCK_WIDTH);
+    const initialBlockWidth = Math.floor(w * BLOCK_WIDTH_RATIO);
+    this.placeBlock(w / 2, baseY, initialBlockWidth);
     this.spawnMovingBlock();
 
     // Score text
-    this.scoreText = this.add.text(w / 2, 55, '0', {
-      fontSize: '68px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+    const scoreSize = Math.max(36, Math.min(68, Math.floor(h * 0.08)));
+    this.scoreText = this.add.text(w / 2, Math.max(55, h * 0.07), '0', {
+      fontSize: `${scoreSize}px`, fontFamily: 'Segoe UI, system-ui, sans-serif',
       fontStyle: 'bold', color: '#ffffff',
       shadow: { offsetX: 0, offsetY: 4, color: '#00000066', blur: 12, fill: true }
     }).setOrigin(0.5).setDepth(10);
 
     // Combo text
-    this.comboText = this.add.text(w / 2, 120, '', {
+    this.comboText = this.add.text(w / 2, Math.max(100, h * 0.14), '', {
       fontSize: '22px', fontFamily: 'Segoe UI, system-ui, sans-serif',
       fontStyle: 'bold', color: '#FECA57'
     }).setOrigin(0.5).setDepth(10).setAlpha(0);
@@ -723,8 +732,9 @@ class GameOverScene extends Phaser.Scene {
     }
 
     // Game Over
+    const goTitleSize = Math.max(28, Math.min(44, Math.floor(h * 0.055)));
     const goText = this.add.text(w / 2, h * 0.12, 'GAME OVER', {
-      fontSize: '44px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontSize: `${goTitleSize}px`, fontFamily: 'Segoe UI, system-ui, sans-serif',
       fontStyle: 'bold', color: '#FF6B6B',
       shadow: { offsetX: 0, offsetY: 3, color: '#00000088', blur: 8, fill: true }
     }).setOrigin(0.5).setAlpha(0).setScale(0.8);
@@ -744,8 +754,9 @@ class GameOverScene extends Phaser.Scene {
     }
 
     // Score
+    const goScoreSize = Math.max(48, Math.min(92, Math.floor(h * 0.1)));
     const scoreNum = this.add.text(w / 2, h * 0.34, score.toString(), {
-      fontSize: '92px', fontFamily: 'Segoe UI, system-ui, sans-serif',
+      fontSize: `${goScoreSize}px`, fontFamily: 'Segoe UI, system-ui, sans-serif',
       fontStyle: 'bold', color: '#ffffff',
       shadow: { offsetX: 0, offsetY: 5, color: '#000000', blur: 12, fill: true }
     }).setOrigin(0.5).setAlpha(0);
@@ -758,7 +769,7 @@ class GameOverScene extends Phaser.Scene {
 
     // Stats panel
     const panelY = h * 0.54;
-    const panelW = 280, panelH = 90;
+    const panelW = Math.min(280, w * 0.7), panelH = 90;
     const panel = this.add.graphics();
     panel.fillStyle(0xffffff, 0.06);
     panel.fillRoundedRect(w / 2 - panelW / 2, panelY - panelH / 2, panelW, panelH, 14);
@@ -842,6 +853,13 @@ class GameOverScene extends Phaser.Scene {
     });
     menuText.on('pointerover', () => menuText.setColor('#ffffffaa'));
     menuText.on('pointerout', () => menuText.setColor('#ffffff44'));
+
+    // Handle resize
+    this._resizeData = data;
+    this.scale.on('resize', (gameSize) => {
+      this.cameras.main.setSize(gameSize.width, gameSize.height);
+      this.scene.restart(this._resizeData);
+    });
   }
 }
 
@@ -850,13 +868,13 @@ class GameOverScene extends Phaser.Scene {
    ========================================== */
 const config = {
   type: Phaser.AUTO,
-  width: GAME_WIDTH,
-  height: GAME_HEIGHT,
   parent: 'game-container',
   backgroundColor: '#0a0a1a',
   scale: {
-    mode: Phaser.Scale.FIT,
+    mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: '100%',
+    height: '100%',
   },
   scene: [BootScene, MenuScene, GameScene, GameOverScene]
 };
