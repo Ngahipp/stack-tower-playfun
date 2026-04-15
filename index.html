@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<meta name="x-ogp-key" content="YOUR_API_KEY">
+<meta name="x-ogp-key" content="faec5b4e-bae4-481d-9a33-533afdf83d51">
 <title>Stack Tower</title>
 <script src="https://sdk.play.fun"></script>
 <style>
@@ -26,8 +26,14 @@ const PlayFunSDK = {
   bestScore: 0,
   currentSessionScore: 0,
   pointsAddedThisSession: 0,
+  paused: false,
+  _phaserGame: null,
 
   init() {
+    if (typeof OpenGameSDK === 'undefined') {
+      console.warn('[Play.fun] SDK not loaded, running in offline mode');
+      return;
+    }
     try {
       this.ogp = new OpenGameSDK({
         ui: { usePointsWidget: true, theme: 'dark' },
@@ -47,9 +53,24 @@ const PlayFunSDK = {
       this.ogp.on('SavePointsFailed', () => {
         console.warn('[Play.fun] Save failed');
       });
-      this.ogp.init({ gameId: 'YOUR_GAME_ID' });
+      // Pause/Resume when SDK modals appear
+      this.ogp.on('GamePause', () => {
+        this.paused = true;
+        if (this._phaserGame) {
+          const gameScene = this._phaserGame.scene.getScene('GameScene');
+          if (gameScene && gameScene.scene.isActive()) gameScene.scene.pause();
+        }
+      });
+      this.ogp.on('GameResume', () => {
+        this.paused = false;
+        if (this._phaserGame) {
+          const gameScene = this._phaserGame.scene.getScene('GameScene');
+          if (gameScene && gameScene.scene.isPaused()) gameScene.scene.resume();
+        }
+      });
+      this.ogp.init({ gameId: '84143dbb-4b02-49ae-9e55-362fc3a2e66f' });
     } catch (e) {
-      console.warn('[Play.fun] SDK not available, running in offline mode');
+      console.warn('[Play.fun] SDK init error, running in offline mode:', e);
     }
   },
 
@@ -841,6 +862,7 @@ const config = {
 };
 
 const game = new Phaser.Game(config);
+PlayFunSDK._phaserGame = game;
 </script>
 </body>
 </html>
